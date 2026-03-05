@@ -1,8 +1,8 @@
-name: Deploy AI Service
+name: Deploy AI Service to Orange Pi
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main ] # Деплой сработает при каждом пуше в ветку main
 
 jobs:
   deploy:
@@ -11,28 +11,34 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to Server via SSH
+      # 1. Подключаем виртуальную машину GitHub к твоему Tailscale
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+
+      # 2. Копируем файлы на Orange Pi (используем rsync для скорости)
+      - name: Deploy files via SSH
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: orangepi
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "."
+          target: "/home/orangepi/My/ai_service"
+          rm: false # Не удалять старые файлы (например, .env или логи)
+
+      # 3. Установка зависимостей и перезапуск сервиса
+      - name: Restart AI Service
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.HOST_IP }}
-          username: ${{ secrets.HOST_USER }}
+          host: ${{ secrets.SERVER_IP }}
+          username: orangepi
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # 1. Переходим в папку проектов (создай её если нет)
-            mkdir -p ~/My/ai_service
-            cd ~/My/ai_service
-
-            # 2. Обновляем код (предполагаем, что репо уже склонирован)
-            if [ ! -d ".git" ]; then
-              git clone https://github.com/${{ github.repository }}.git .
-            else
-              git pull origin main
-            fi
-
-            # 3. Настраиваем окружение
-            python3 -m venv venv
-            source venv/bin/activate
+            cd /home/orangepi/My/ai_service
+            # Если используешь venv, раскомментируй строку ниже:
+            # source venv/bin/activate
             pip install -r requirements.txt
-
-            # 4. Перезапуск сервиса (Systemd)
-            sudo systemctl restart ai-service.service
+            sudo systemctl restart ai-service
+            sudo systemctl status ai-service | grep "Active"
