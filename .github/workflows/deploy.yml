@@ -1,0 +1,38 @@
+name: Deploy AI Service
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # 1. Переходим в папку проектов (создай её если нет)
+            mkdir -p ~/My/ai_service
+            cd ~/My/ai_service
+
+            # 2. Обновляем код (предполагаем, что репо уже склонирован)
+            if [ ! -d ".git" ]; then
+              git clone https://github.com/${{ github.repository }}.git .
+            else
+              git pull origin main
+            fi
+
+            # 3. Настраиваем окружение
+            python3 -m venv venv
+            source venv/bin/activate
+            pip install -r requirements.txt
+
+            # 4. Перезапуск сервиса (Systemd)
+            sudo systemctl restart ai-service.service
