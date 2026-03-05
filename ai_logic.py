@@ -1,6 +1,8 @@
 import os
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
+from schemas import UserRequest
 
 load_dotenv()
 
@@ -22,18 +24,45 @@ MODELS_PRIORITY = [
     'models/gemini-1.5-flash'       
 ]
 
-def ask_gemini(prompt: str):
+def ask_gemini(request: UserRequest):
+    """Отправляет запрос к Gemini с учетом настроек безопасности и параметров."""
+    # Приводим строковые значения из request к объектам Enum библиотеки
+    config = types.GenerateContentConfig(
+        system_instruction=request.system_instruction,
+        temperature=request.temperature,
+        top_p=request.top_p,
+        top_k=request.top_k,
+        max_output_tokens=request.max_output_tokens,
+        safety_settings=[
+            types.SafetySetting(
+                category="HATE_SPEECH",  # type: ignore
+                threshold=request.hate_threshold or "BLOCK_MEDIUM_AND_ABOVE" # type: ignore
+            ),
+            types.SafetySetting(
+                category="HARASSMENT",  # type: ignore
+                threshold=request.harassment_threshold or "BLOCK_MEDIUM_AND_ABOVE" # type: ignore
+            ),
+            types.SafetySetting(
+                category="DANGEROUS_CONTENT",  # type: ignore
+                threshold="BLOCK_MEDIUM_AND_ABOVE" # type: ignore
+            ),
+            types.SafetySetting(
+                category="SEXUALLY_EXPLICIT",  # type: ignore
+                threshold="BLOCK_MEDIUM_AND_ABOVE" # type: ignore
+            ),
+        ]
+    )
+
     for model_id in MODELS_PRIORITY:
         try:
             response = client.models.generate_content(
                 model=model_id,
-                contents=prompt
+                contents=request.prompt,
+                config=config
             )
-            # Добавляем проверку: если текст пустой или None, берем пустую строку
-            text = response.text if response.text else "Модель вернула пустой ответ"
+            text = response.text if response.text else "Пустой ответ"
             return text, model_id
-            
         except Exception as e:
-            # ... ваш код обработки ошибок ...
+            print(f"Ошибка модели {model_id}: {e}")
             continue
     return "Все модели заняты", "none"

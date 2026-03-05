@@ -1,7 +1,6 @@
 import uvicorn
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-#from auth import get_current_user
 from ai_logic import ask_gemini
 from schemas import UserRequest, AIResponse
 
@@ -20,12 +19,11 @@ async def health_check():
     return {"status": "ok", "port": 8001}
 
 @app.post("/api/chat", response_model=AIResponse)
-async def chat_with_ai(request: UserRequest): #, user: dict = Depends(get_current_user)):
+async def chat_with_ai(request: UserRequest):
     print(f"--- AI Service Log ---")
-    #print(f"User: {user['email']}")
     print(f"Prompt: {request.prompt[:50]}...")
-    ai_text, model_used = ask_gemini(request.prompt)
+    ai_text, model_used = ask_gemini(request)
     return AIResponse(answer=ai_text, model=model_used)
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
