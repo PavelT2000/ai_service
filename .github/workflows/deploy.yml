@@ -2,7 +2,7 @@ name: Deploy AI Service to Orange Pi
 
 on:
   push:
-    branches: [ main ] # Деплой сработает при каждом пуше в ветку main
+    branches: [ main ]
 
 jobs:
   deploy:
@@ -11,34 +11,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. Подключаем виртуальную машину GitHub к твоему Tailscale
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
 
-      # 2. Копируем файлы на Orange Pi (используем rsync для скорости)
-      - name: Deploy files via SSH
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "."
-          target: "/home/orangepi/My/ai_service"
-          rm: false # Не удалять старые файлы (например, .env или логи)
-
-      # 3. Установка зависимостей и перезапуск сервиса
-      - name: Restart AI Service
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USER }}
+          host: ${{ secrets.HOST_IP }}
+          username: ${{ secrets.HOST_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /home/orangepi/My/ai_service
-            # Если используешь venv, раскомментируй строку ниже:
-            # source venv/bin/activate
-            pip install -r requirements.txt
-            sudo systemctl restart ai-service
-            sudo systemctl status ai-service | grep "Active"
+            # Переходим в папку сервиса
+            cd ~/My/ai_service
+            
+            # 1. Синхронизируем код с GitHub
+            # (Убедись, что в этой папке на плате уже сделан git clone этого репозитория)
+            git fetch --all
+            git reset --hard origin/main
+            
+            # 2. Обновляем зависимости (если используешь системный питон)
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt
+            fi
+            
+            # 3. Перезапускаем сервис, который мы создали ранее
+            sudo systemctl restart ai-service.service
+            
+            # 4. Проверка
+            systemctl is-active ai-service.service
