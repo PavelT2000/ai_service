@@ -26,9 +26,32 @@ MODELS_PRIORITY = [
 ]
 
 def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
-    """Отправляет запрос в Gemini и возвращает структурированный словарь с ответом."""
-    config_params = request.model_dump(exclude={"contents"})
-    config = types.GenerateContentConfig(**config_params)
+    # 1. Извлекаем базовые параметры (temperature, tokens и т.д.)
+    config_params = request.model_dump(exclude={"contents", "tools"})
+    
+    # 2. Обрабатываем инструменты (tools), если они есть
+    processed_tools = []
+    if request.tools:
+        for tool_dict in request.tools:
+            # Превращаем словарь в объект декларации функции
+            # Gemini SDK ожидает, что функция лежит внутри объекта Tool как declaration
+            processed_tools.append(
+                types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(
+                            name=tool_dict["name"],
+                            description=tool_dict.get("description", ""),
+                            parameters=tool_dict.get("parameters", {})
+                        )
+                    ]
+                )
+            )
+    
+    # 3. Собираем конфиг
+    config = types.GenerateContentConfig(
+        **config_params,
+        tools=processed_tools if processed_tools else None
+    )
 
     for model_id in MODELS_PRIORITY:
         try:
