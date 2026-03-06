@@ -1,14 +1,15 @@
+"""Основной сервис FastAPI для проксирования запросов к ИИ."""
 import uvicorn
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ai_logic import ask_gemini
-from schemas import UserRequest, AIResponse
+from schemas import ProxyRequest, ProxyResponse
 
 app = FastAPI(title="Independent AI Service")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # В продакшене лучше указать конкретный домен
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -16,14 +17,22 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
+    """Проверка доступности сервиса."""
     return {"status": "ok", "port": 8001}
 
-@app.post("/api/chat", response_model=AIResponse)
-async def chat_with_ai(request: UserRequest):
-    print(f"--- AI Service Log ---")
-    print(f"Prompt: {request.prompt[:50]}...")
-    ai_text, model_used = ask_gemini(request)
-    return AIResponse(answer=ai_text, model=model_used)
+@app.post("/api/chat", response_model=ProxyResponse)
+async def proxy_chat(request: ProxyRequest):
+    """Проксирует запрос к Gemini и возвращает результат."""
+    print(f"--- Proxying request: {len(request.contents)} messages ---")
+
+    result = ask_gemini(request)
+
+    return ProxyResponse(
+        answer=result["answer"],
+        function_calls=result["function_calls"],
+        model_used=result["model_used"],
+        finish_reason=result["finish_reason"]
+    )
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
