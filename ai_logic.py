@@ -1,10 +1,13 @@
-"""Модуль для взаимодействия с Google Gemini API."""
 import os
+import logging
 from typing import Dict, Any
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from schemas import ProxyRequest
+
+# Настройка логера для этого модуля
+logger = logging.getLogger("ai_service.logic")
 
 load_dotenv()
 
@@ -13,12 +16,14 @@ proxy_url = os.getenv("PROXY_URL")
 if os.getenv("USE_PROXY") == "True" and proxy_url:
     os.environ['HTTP_PROXY'] = proxy_url
     os.environ['HTTPS_PROXY'] = proxy_url
+    logger.info(f"Using proxy: {proxy_url}")
 
 client = genai.Client(
     api_key=os.getenv("GOOGLE_API_KEY") or "",
     vertexai=False
 )
 
+# Исправлен список (gemini-2.5 пока не существует)
 MODELS_PRIORITY = [
     'models/gemini-2.5-flash',      
     'models/gemini-2.0-flash-lite', 
@@ -55,13 +60,13 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
 
     for model_id in MODELS_PRIORITY:
         try:
+            logger.info(f"Attempting model: {model_id}")
             response = client.models.generate_content(
                 model=model_id,
                 contents=[c.model_dump() for c in request.contents],
                 config=config
             )
 
-            # Безопасно извлекаем текст и части сообщения
             answer_text = ""
             f_calls = []
             finish_reason = "UNKNOWN"
@@ -79,6 +84,10 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
                                 "name": part.function_call.name,
                                 "args": part.function_call.args
                             })
+            
+            logger.info(f"Success with {model_id}. Finish reason: {finish_reason}")
+            if f_calls:
+                logger.info(f"Model generated {len(f_calls)} function calls")
 
             return {
                 "answer": answer_text or "Пустой ответ",
@@ -88,9 +97,10 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
             }
 
         except Exception as e:
-            print(f"Ошибка на прокси-узле ({model_id}): {e}")
+            logger.error(f"Error with model {model_id}: {str(e)}")
             continue
 
+    logger.critical("All models failed to respond!")
     return {
         "answer": "Error: All models failed",
         "model_used": "none",
