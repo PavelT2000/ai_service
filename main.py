@@ -3,9 +3,8 @@ import logging
 import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ai_logic import ask_gemini
-from schemas import ProxyRequest, ProxyResponse
-
+from ai_logic import ask_gemini, get_embedding
+from schemas import ProxyRequest, ProxyResponse, EmbeddingRequest, EmbeddingResponse
 # Настройка корневого логирования для вывода в stdout (важно для systemd)
 logging.basicConfig(
     level=logging.INFO,
@@ -45,7 +44,18 @@ async def proxy_chat(request: ProxyRequest):
         model_used=result["model_used"],
         finish_reason=result["finish_reason"]
     )
-
+    
+@app.post("/api/embed", response_model=EmbeddingResponse)
+async def proxy_embedding(request: EmbeddingRequest):
+    logger.info("Incoming embedding request")
+    
+    result = get_embedding(request)
+    
+    return EmbeddingResponse(
+        embedding=result["embedding"],
+        model_used=result["model_used"]
+    )
+    
 if __name__ == "__main__":
     # reload=True на сервере лучше убрать, если это продакшн на Orange Pi
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False)

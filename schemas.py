@@ -31,3 +31,12 @@ class ProxyResponse(BaseModel):
     function_calls: Optional[List[Dict[str, Any]]] = None
     model_used: str
     finish_reason: str
+    
+class EmbeddingRequest(BaseModel):
+    text: str
+    task_type: Optional[str] = "RETRIEVAL_QUERY" # Или "RETRIEVAL_DOCUMENT" для сохранения в БД
+    title: Optional[str] = None
+
+class EmbeddingResponse(BaseModel):
+    embedding: List[float]
+    model_used: str

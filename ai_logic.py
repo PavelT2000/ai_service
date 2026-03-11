@@ -4,7 +4,7 @@ from typing import Dict, Any
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from schemas import ProxyRequest
+from schemas import ProxyRequest, EmbeddingRequest, EmbeddingResponse
 
 # Настройка логера для этого модуля
 logger = logging.getLogger("ai_service.logic")
@@ -107,3 +107,30 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
         "finish_reason": "ERROR",
         "function_calls": None
     }
+    
+    
+EMBEDDING_MODEL = 'gemini-embedding-2-preview'
+
+def get_embedding(request: EmbeddingRequest) -> Dict[str, Any]:
+    try:
+        logger.info(f"Generating embedding for text length: {len(request.text)}")
+        
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=request.text,
+            config=types.EmbedContentConfig(
+                task_type=request.task_type,
+                title=request.title
+            )
+        )
+        if not result or not result.embeddings:
+            logger.error("API returned empty embeddings")
+            raise ValueError("Empty response from Gemini API")
+        
+        return {
+            "embedding": result.embeddings[0].values,
+            "model_used": EMBEDDING_MODEL
+        }
+    except Exception as e:
+        logger.error(f"Embedding error: {str(e)}")
+        raise e
