@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Any
 from google import genai
 from google.genai import types
+from fastapi import HTTPException, status
 from dotenv import load_dotenv
 from schemas import ProxyRequest, EmbeddingRequest, EmbeddingResponse
 
@@ -101,12 +102,14 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
             continue
 
     logger.critical("All models failed to respond!")
-    return {
-        "answer": "Error: All models failed",
-        "model_used": "none",
-        "finish_reason": "ERROR",
-        "function_calls": None
-    }
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "error": "All AI models failed",
+            "message": "Сервис временно недоступен. Попробуйте позже.",
+            "finish_reason": "ERROR"
+        }
+    )
     
     
 EMBEDDING_MODEL = 'gemini-embedding-2-preview'
