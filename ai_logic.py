@@ -26,7 +26,7 @@ client = genai.Client(
 
 # Исправлен список (gemini-2.5 пока не существует)
 MODELS_PRIORITY = [
-    'gemini-3.1-flash-lite',
+    'models/gemini-3.1-flash-lite-preview',
     'models/gemini-2.5-flash',      
     'models/gemini-2.0-flash-lite', 
     'models/gemini-1.5-flash'

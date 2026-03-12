@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ai_logic import ask_gemini, get_embedding
 from schemas import ProxyRequest, ProxyResponse, EmbeddingRequest, EmbeddingResponse
+
 # Настройка корневого логирования для вывода в stdout (важно для systemd)
 logging.basicConfig(
     level=logging.INFO,
