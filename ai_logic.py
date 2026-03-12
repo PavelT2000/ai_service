@@ -58,7 +58,8 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
         **config_params,
         tools=processed_tools if processed_tools else None
     )
-
+        
+    attempt_details = []
     for model_id in MODELS_PRIORITY:
         try:
             logger.info(f"Attempting model: {model_id}")
@@ -98,16 +99,24 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
             }
 
         except Exception as e:
+            error_msg = str(e)
             logger.error(f"Error with model {model_id}: {str(e)}")
+            attempt_details.append({
+                "model": model_id,
+                "error": error_msg,
+                "type": type(e).__name__
+            })
             continue
 
     logger.critical("All models failed to respond!")
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
-            "error": "All AI models failed",
-            "message": "Сервис временно недоступен. Попробуйте позже.",
-            "finish_reason": "ERROR"
+            "status": "error",
+            "answer": "К сожалению, все ИИ-модели сейчас недоступны.",
+            "model_used": "none",
+            "finish_reason": "ALL_MODELS_FAILED",
+            "errors": attempt_details # Здесь будет список всех пойманных Exception
         }
     )
     
