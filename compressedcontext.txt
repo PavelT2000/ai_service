@@ -1,0 +1,304 @@
+=== PROJECT HIERARCHY ===
+├── .aiignore
+├── .gitignore
+├── ai_logic.py
+├── main.py
+├── requirements.txt
+└── schemas.py
+
+=== SOURCE CODE ===
+
+--- FILE: ai_logic.py ---
+import os
+import logging
+from typing import Dict, Any
+from google import genai
+from google.genai import types
+from fastapi import HTTPException, status
+from dotenv import load_dotenv
+from schemas import ProxyRequest, EmbeddingRequest, EmbeddingResponse
+
+# Настройка логера для этого модуля
+logger = logging.getLogger("ai_service.logic")
+
+load_dotenv()
+
+# Прокси
+proxy_url = os.getenv("PROXY_URL")
+if os.getenv("USE_PROXY") == "True" and proxy_url:
+    os.environ['HTTP_PROXY'] = proxy_url
+    os.environ['HTTPS_PROXY'] = proxy_url
+    logger.info(f"Using proxy: {proxy_url}")
+
+client = genai.Client(
+    api_key=os.getenv("GOOGLE_API_KEY") or "",
+    vertexai=False
+)
+
+# Исправлен список (gemini-2.5 пока не существует)
+MODELS_PRIORITY = [
+    'models/gemini-3.1-flash-lite-preview',
+    'models/gemini-2.5-flash',      
+    'models/gemini-2.0-flash-lite', 
+    'models/gemini-1.5-flash'
+]
+
+def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
+    # 1. Извлекаем базовые параметры (temperature, tokens и т.д.)
+    config_params = request.model_dump(exclude={"contents", "tools"})
+    
+    # 2. Обрабатываем инструменты (tools), если они есть
+    processed_tools = []
+    if request.tools:
+        for tool_dict in request.tools:
+            # Превращаем словарь в объект декларации функции
+            # Gemini SDK ожидает, что функция лежит внутри объекта Tool как declaration
+            processed_tools.append(
+                types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(
+                            name=tool_dict["name"],
+                            description=tool_dict.get("description", ""),
+                            parameters=tool_dict.get("parameters", {})
+                        )
+                    ]
+                )
+            )
+    
+    # 3. Собираем конфиг
+    config = types.GenerateContentConfig(
+        **config_params,
+        tools=processed_tools if processed_tools else None
+    )
+        
+    attempt_details = []
+    for model_id in MODELS_PRIORITY:
+        try:
+            logger.info(f"Attempting model: {model_id}")
+            response = client.models.generate_content(
+                model=model_id,
+                contents=[c.model_dump() for c in request.contents],
+                config=config
+            )
+
+            answer_text = ""
+            f_calls = []
+            finish_reason = "UNKNOWN"
+
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                finish_reason = candidate.finish_reason or "UNKNOWN"
+                
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if part.text:
+                            answer_text += part.text
+                        if part.function_call:
+                            f_calls.append({
+                                "name": part.function_call.name,
+                                "args": part.function_call.args
+                            })
+            
+            logger.info(f"Success with {model_id}. Finish reason: {finish_reason}")
+            if f_calls:
+                logger.info(f"Model generated {len(f_calls)} function calls")
+
+            return {
+                "answer": answer_text or "Пустой ответ",
+                "function_calls": f_calls if f_calls else None,
+                "model_used": model_id,
+                "finish_reason": str(finish_reason)
+            }
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error with model {model_id}: {str(e)}")
+            attempt_details.append({
+                "model": model_id,
+                "error": error_msg,
+                "type": type(e).__name__
+            })
+            continue
+
+    logger.critical("All models failed to respond!")
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "status": "error",
+            "answer": "К сожалению, все ИИ-модели сейчас недоступны.",
+            "model_used": "none",
+            "finish_reason": "ALL_MODELS_FAILED",
+            "errors": attempt_details # Здесь будет список всех пойманных Exception
+        }
+    )
+    
+    
+EMBEDDING_MODEL = 'gemini-embedding-2-preview'
+
+def get_embedding(request: EmbeddingRequest) -> Dict[str, Any]:
+    try:
+        logger.info(f"Generating embedding for text length: {len(request.text)}")
+        
+        result = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=request.text,
+            config=types.EmbedContentConfig(
+                task_type=request.task_type,
+                title=request.title
+            )
+        )
+        if not result or not result.embeddings:
+            logger.error("API returned empty embeddings")
+            raise ValueError("Empty response from Gemini API")
+        
+        return {
+            "embedding": result.embeddings[0].values,
+            "model_used": EMBEDDING_MODEL
+        }
+    except Exception as e:
+        logger.error(f"Embedding error: {str(e)}")
+        raise e
+
+--- FILE: main.py ---
+import uvicorn
+import logging
+import sys
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from ai_logic import ask_gemini, get_embedding
+from schemas import ProxyRequest, ProxyResponse, EmbeddingRequest, EmbeddingResponse
+
+# Настройка корневого логирования для вывода в stdout (важно для systemd)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("ai_service.main")
+
+app = FastAPI(title="Independent AI Service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "port": 8001}
+
+@app.post("/api/chat", response_model=ProxyResponse)
+async def proxy_chat(request: ProxyRequest):
+    # Логируем входящий запрос
+    logger.info(f"Incoming request: {len(request.contents)} messages")
+    
+    result = ask_gemini(request)
+
+    # Логируем краткий результат (первые 50 символов ответа)
+    short_answer = result["answer"][:50].replace("\n", " ")
+    logger.info(f"Sending response. Model: {result['model_used']}. Preview: {short_answer}...")
+
+    return ProxyResponse(
+        answer=result["answer"],
+        function_calls=result["function_calls"],
+        model_used=result["model_used"],
+        finish_reason=result["finish_reason"]
+    )
+    
+@app.post("/api/embed", response_model=EmbeddingResponse)
+async def proxy_embedding(request: EmbeddingRequest):
+    logger.info("Incoming embedding request")
+    
+    result = get_embedding(request)
+    
+    return EmbeddingResponse(
+        embedding=result["embedding"],
+        model_used=result["model_used"]
+    )
+    
+if __name__ == "__main__":
+    # reload=True на сервере лучше убрать, если это продакшн на Orange Pi
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False)
+
+--- FILE: requirements.txt ---
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.12.1
+certifi==2026.2.25
+cffi==2.0.0
+charset-normalizer==3.4.4
+click==8.3.1
+cryptography==46.0.5
+distro==1.9.0
+fastapi==0.135.1
+google-auth==2.48.0
+google-genai==1.66.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.11
+pyasn1==0.6.2
+pyasn1_modules==0.4.2
+pycparser==3.0
+pydantic==2.12.5
+pydantic_core==2.41.5
+python-dotenv==1.2.2
+requests==2.32.5
+rsa==4.9.1
+sniffio==1.3.1
+socksio==1.0.0
+starlette==0.52.1
+tenacity==9.1.4
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+urllib3==2.6.3
+uvicorn==0.41.0
+websockets==16.0
+
+
+--- FILE: schemas.py ---
+from pydantic import BaseModel, Field
+from typing import List, Optional, Any, Dict
+
+class GeminiContentPart(BaseModel):
+    text: Optional[str] = None
+    inline_data: Optional[Any] = None
+    function_call: Optional[Any] = None
+    function_response: Optional[Any] = None
+
+class GeminiContent(BaseModel):
+    role: str  # "user" или "model"
+    parts: List[GeminiContentPart]
+
+class ProxyRequest(BaseModel):
+    # Вместо одного prompt используем contents для поддержки истории
+    contents: List[GeminiContent] 
+    system_instruction: Optional[str] = None
+    tools: Optional[List[Dict[str, Any]]] = None  # Для Function Calling
+    
+    # Параметры генерации
+    temperature: Optional[float] = 0.7
+    max_output_tokens: Optional[int] = 1000
+    top_p: Optional[float] = 0.95
+    top_k: Optional[int] = 40
+    
+    # Безопасность
+    safety_settings: Optional[List[Dict[str, str]]] = None
+
+class ProxyResponse(BaseModel):
+    answer: str
+    function_calls: Optional[List[Dict[str, Any]]] = None
+    model_used: str
+    finish_reason: str
+    
+class EmbeddingRequest(BaseModel):
+    text: str
+    task_type: Optional[str] = "RETRIEVAL_QUERY" # Или "RETRIEVAL_DOCUMENT" для сохранения в БД
+    title: Optional[str] = None
+
+class EmbeddingResponse(BaseModel):
+    embedding: List[float]
+    model_used: str
