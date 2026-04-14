@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict
 
@@ -37,6 +38,33 @@ def _load_models_config() -> Dict[str, Any]:
 MODELS_CONFIG = _load_models_config()
 CHAT_MODELS_PRIORITY = MODELS_CONFIG["chat"]["priority"]
 EMBEDDING_MODEL = MODELS_CONFIG["embedding"]["default"]
+
+
+def _extract_retry_seconds(error_message: str) -> int | None:
+    float_retry_match = re.search(r"retry in (\d+(?:\.\d+)?)s", error_message, re.IGNORECASE)
+    if float_retry_match:
+        return max(1, int(float(float_retry_match.group(1))))
+
+    int_retry_match = re.search(r"'retryDelay': '(\d+)s'", error_message)
+    if int_retry_match:
+        return max(1, int(int_retry_match.group(1)))
+
+    return None
+
+
+def _is_temporary_error(error_message: str) -> bool:
+    lowered = error_message.lower()
+    temporary_markers = (
+        "resource_exhausted",
+        "unavailable",
+        "too many requests",
+        "retry in",
+        "retrydelay",
+        "timed out",
+        "timeout",
+        "server disconnected",
+    )
+    return any(marker in lowered for marker in temporary_markers)
 
 
 def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
@@ -112,6 +140,27 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
             continue
 
     logger.critical("All models failed to respond: %s", attempt_details)
+
+    retry_candidates = [
+        _extract_retry_seconds(item["error"])
+        for item in attempt_details
+        if _is_temporary_error(item["error"])
+    ]
+    retry_seconds = max((seconds for seconds in retry_candidates if seconds is not None), default=None)
+
+    if retry_seconds is not None:
+        wait_message = (
+            f"Сервис сейчас перегружен. Пожалуйста, подождите {retry_seconds} сек. "
+            "и повторите запрос."
+        )
+        logger.warning("Temporary failure, returning wait response: %s", wait_message)
+        return {
+            "answer": wait_message,
+            "function_calls": None,
+            "model_used": "none",
+            "finish_reason": "RETRY_LATER",
+        }
+
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="Service unavailable",
