@@ -192,6 +192,8 @@ Generates a dense vector embedding for semantic search, clustering, or RAG index
 }
 ```
 
+**Quota behavior note:** `/api/embed` uses embedding models and quotas that are separate from text-generation quotas. It is possible to see `200 OK` on embeddings while `/api/chat` is temporarily returning `RETRY_LATER` or `503`.
+
 ---
 
 ## 🚀 Running the Service

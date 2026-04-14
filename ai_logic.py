@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -38,6 +40,9 @@ def _load_models_config() -> Dict[str, Any]:
 MODELS_CONFIG = _load_models_config()
 CHAT_MODELS_PRIORITY = MODELS_CONFIG["chat"]["priority"]
 EMBEDDING_MODEL = MODELS_CONFIG["embedding"]["default"]
+FALLBACK_DELAY_SECONDS = 1.5
+_chat_cooldown_until = 0.0
+_chat_cooldown_lock = threading.Lock()
 
 
 def _extract_retry_seconds(error_message: str) -> int | None:
@@ -65,6 +70,30 @@ def _is_temporary_error(error_message: str) -> bool:
         "server disconnected",
     )
     return any(marker in lowered for marker in temporary_markers)
+
+
+def _get_chat_cooldown_remaining() -> float:
+    with _chat_cooldown_lock:
+        remaining = _chat_cooldown_until - time.monotonic()
+    return max(0.0, remaining)
+
+
+def _set_chat_cooldown(seconds: int) -> None:
+    if seconds <= 0:
+        return
+    target_time = time.monotonic() + seconds
+    with _chat_cooldown_lock:
+        global _chat_cooldown_until  # pylint: disable=global-statement
+        _chat_cooldown_until = max(_chat_cooldown_until, target_time)
+
+
+def _sleep_before_next_fallback(previous_model: str) -> None:
+    logger.info(
+        "Waiting %.1f sec before next fallback model after %s",
+        FALLBACK_DELAY_SECONDS,
+        previous_model,
+    )
+    time.sleep(FALLBACK_DELAY_SECONDS)
 
 
 def _build_tool_declarations(raw_tools: list[dict[str, Any]] | None) -> list[types.Tool]:
@@ -127,7 +156,26 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
         tools=processed_tools if processed_tools else None,
     )
 
+    cooldown_remaining = _get_chat_cooldown_remaining()
+    if cooldown_remaining > 0:
+        wait_seconds = max(1, int(cooldown_remaining))
+        wait_message = (
+            f"Сервис сейчас перегружен. Пожалуйста, подождите {wait_seconds} сек. "
+            "и повторите запрос."
+        )
+        logger.warning(
+            "Chat generation is cooling down for %.1f sec due to previous 429.",
+            cooldown_remaining,
+        )
+        return {
+            "answer": wait_message,
+            "function_calls": None,
+            "model_used": "none",
+            "finish_reason": "RETRY_LATER",
+        }
+
     attempt_details = []
+    should_stop_fallbacks = False
     for model_id in CHAT_MODELS_PRIORITY:
         try:
             logger.info("Attempting model: %s", model_id)
@@ -174,6 +222,23 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
             attempt_details.append(
                 {"model": model_id, "error": error_msg, "type": type(e).__name__}
             )
+
+            retry_seconds = _extract_retry_seconds(error_msg)
+            if retry_seconds is not None:
+                # Respect provider retry window and block further outgoing chat requests.
+                _set_chat_cooldown(retry_seconds)
+                should_stop_fallbacks = True
+                logger.warning(
+                    "Applying chat cooldown for %s sec after model %s error.",
+                    retry_seconds,
+                    model_id,
+                )
+
+            if should_stop_fallbacks:
+                break
+
+            if _is_temporary_error(error_msg):
+                _sleep_before_next_fallback(model_id)
             continue
 
     logger.critical("All models failed to respond: %s", attempt_details)
