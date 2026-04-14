@@ -67,23 +67,60 @@ def _is_temporary_error(error_message: str) -> bool:
     return any(marker in lowered for marker in temporary_markers)
 
 
+def _build_tool_declarations(raw_tools: list[dict[str, Any]] | None) -> list[types.Tool]:
+    if not raw_tools:
+        return []
+
+    processed_tools: list[types.Tool] = []
+    for tool_item in raw_tools:
+        if not isinstance(tool_item, dict):
+            logger.warning("Skipping invalid tool item (not an object): %r", tool_item)
+            continue
+
+        # Backward-compatible input: {"name": "...", "description": "...", "parameters": {...}}
+        if "name" in tool_item:
+            try:
+                declaration = types.FunctionDeclaration(
+                    name=str(tool_item["name"]),
+                    description=str(tool_item.get("description", "")),
+                    parameters=tool_item.get("parameters", {}),
+                )
+                processed_tools.append(types.Tool(function_declarations=[declaration]))
+            except Exception as tool_error:  # pylint: disable=broad-exception-caught
+                logger.warning("Skipping invalid flat tool declaration: %s", tool_error)
+            continue
+
+        # Newer input: {"function_declarations": [ ... ]}
+        raw_declarations = tool_item.get("function_declarations")
+        if isinstance(raw_declarations, list):
+            declarations = []
+            for raw_declaration in raw_declarations:
+                if not isinstance(raw_declaration, dict):
+                    continue
+                if "name" not in raw_declaration:
+                    continue
+                try:
+                    declarations.append(
+                        types.FunctionDeclaration(
+                            name=str(raw_declaration["name"]),
+                            description=str(raw_declaration.get("description", "")),
+                            parameters=raw_declaration.get("parameters", {}),
+                        )
+                    )
+                except Exception as tool_error:  # pylint: disable=broad-exception-caught
+                    logger.warning("Skipping invalid nested tool declaration: %s", tool_error)
+            if declarations:
+                processed_tools.append(types.Tool(function_declarations=declarations))
+            continue
+
+        logger.warning("Skipping unknown tool format: %r", tool_item)
+
+    return processed_tools
+
+
 def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
     config_params = request.model_dump(exclude={"contents", "tools"})
-
-    processed_tools = []
-    if request.tools:
-        for tool_dict in request.tools:
-            processed_tools.append(
-                types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(
-                            name=tool_dict["name"],
-                            description=tool_dict.get("description", ""),
-                            parameters=tool_dict.get("parameters", {}),
-                        ),
-                    ]
-                )
-            )
+    processed_tools = _build_tool_declarations(request.tools)
 
     config = types.GenerateContentConfig(
         **config_params,
@@ -141,6 +178,9 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
 
     logger.critical("All models failed to respond: %s", attempt_details)
 
+    temporary_errors = [
+        item["error"] for item in attempt_details if _is_temporary_error(item["error"])
+    ]
     retry_candidates = [
         _extract_retry_seconds(item["error"])
         for item in attempt_details
@@ -148,9 +188,10 @@ def ask_gemini(request: ProxyRequest) -> Dict[str, Any]:
     ]
     retry_seconds = max((seconds for seconds in retry_candidates if seconds is not None), default=None)
 
-    if retry_seconds is not None:
+    if temporary_errors:
+        wait_hint = f"{retry_seconds} сек." if retry_seconds is not None else "30-60 сек."
         wait_message = (
-            f"Сервис сейчас перегружен. Пожалуйста, подождите {retry_seconds} сек. "
+            f"Сервис сейчас перегружен. Пожалуйста, подождите {wait_hint} "
             "и повторите запрос."
         )
         logger.warning("Temporary failure, returning wait response: %s", wait_message)

@@ -128,6 +128,48 @@ Generates a response using the Gemini API with support for conversation history,
 }
 ```
 
+#### Response Modes (`/api/chat`)
+
+The endpoint can return three practical response modes:
+
+1. **Normal model answer (`200 OK`)**
+```json
+{
+  "answer": "Model answer text",
+  "function_calls": null,
+  "model_used": "models/gemini-2.5-flash",
+  "finish_reason": "STOP"
+}
+```
+
+2. **Temporary overload / rate limit fallback (`200 OK`)**
+```json
+{
+  "answer": "Сервис сейчас перегружен. Пожалуйста, подождите 30-60 сек. и повторите запрос.",
+  "function_calls": null,
+  "model_used": "none",
+  "finish_reason": "RETRY_LATER"
+}
+```
+
+3. **Hard failure (`503 Service Unavailable`)**
+- Returned only when all model attempts failed with non-retryable errors
+  (for example, invalid credentials, forbidden access, or unavailable model IDs),
+  and no safe retry fallback could be built.
+
+#### Notes on `tools`
+
+- Supported formats for tool declarations:
+  - Flat format:
+    ```json
+    { "name": "...", "description": "...", "parameters": { ... } }
+    ```
+  - Nested format:
+    ```json
+    { "function_declarations": [{ "name": "...", "description": "...", "parameters": { ... } }] }
+    ```
+- Invalid tool items are skipped (with warning logs) instead of crashing the request.
+
 ---
 
 ### `POST /api/embed`
