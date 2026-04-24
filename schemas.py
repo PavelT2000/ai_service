@@ -1,42 +1,51 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict
+"""Схемы данных Pydantic для API."""
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel
+
 
 class GeminiContentPart(BaseModel):
+    """Часть содержимого сообщения."""
     text: Optional[str] = None
     inline_data: Optional[Any] = None
     function_call: Optional[Any] = None
     function_response: Optional[Any] = None
 
+
 class GeminiContent(BaseModel):
-    role: str  # "user" или "model"
+    """Сообщение с указанием роли (user/model)."""
+    role: str
     parts: List[GeminiContentPart]
 
+
 class ProxyRequest(BaseModel):
-    # Вместо одного prompt используем contents для поддержки истории
+    """Запрос на генерацию контента."""
     contents: List[GeminiContent]
     system_instruction: Optional[str] = None
-    tools: Optional[List[Dict[str, Any]]] = None  # Для Function Calling
-
-    # Параметры генерации
+    tools: Optional[List[Dict[str, Any]]] = None
     temperature: Optional[float] = 0.7
     max_output_tokens: Optional[int] = 1000
     top_p: Optional[float] = 0.95
     top_k: Optional[int] = 40
-
-    # Безопасность
     safety_settings: Optional[List[Dict[str, str]]] = None
 
+
 class ProxyResponse(BaseModel):
+    """Ответ генерации контента."""
     answer: str
     function_calls: Optional[List[Dict[str, Any]]] = None
     model_used: str
     finish_reason: str
 
+
 class EmbeddingRequest(BaseModel):
+    """Запрос на получение вектора (embedding)."""
     text: str
-    task_type: Optional[str] = "RETRIEVAL_QUERY" # Или "RETRIEVAL_DOCUMENT" для сохранения в БД
+    task_type: Optional[str] = "RETRIEVAL_QUERY"
     title: Optional[str] = None
 
+
 class EmbeddingResponse(BaseModel):
+    """Ответ с вектором."""
     embedding: List[float]
     model_used: str

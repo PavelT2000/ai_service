@@ -1,20 +1,15 @@
-import logging
-import sys
-
+"""Точка входа в приложение FastAPI."""
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ai_logic import ask_gemini, get_embedding
+from logger_config import get_logger, setup_logging
 from schemas import EmbeddingRequest, EmbeddingResponse, ProxyRequest, ProxyResponse
 
-# Корневой логгер в stdout (удобно для контейнеров и сервисов).
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger("ai_service.main")
+# Настраиваем логирование перед созданием приложения
+setup_logging()
+logger = get_logger("ai_service.main")
 
 app = FastAPI(title="Independent AI Service")
 
@@ -26,32 +21,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/health")
 async def health_check():
+    """Проверка доступности сервиса."""
     return {"status": "ok", "port": 8001}
 
 
 @app.post("/api/chat", response_model=ProxyResponse)
 async def proxy_chat(request: ProxyRequest):
-    logger.info("Incoming request: %s messages", len(request.contents))
-
+    """Обработка чат-запросов."""
+    logger.info("Chat request: %s messages", len(request.contents))
     result = ask_gemini(request)
-
     return ProxyResponse(**result)
 
 
 @app.post("/api/embed", response_model=EmbeddingResponse)
 async def proxy_embedding(request: EmbeddingRequest):
-    logger.info("Incoming embedding request")
-
+    """Генерация эмбеддингов."""
+    logger.info("Embedding request received")
     result = get_embedding(request)
-
-    return EmbeddingResponse(
-        embedding=result["embedding"],
-        model_used=result["model_used"],
-    )
+    return EmbeddingResponse(**result)
 
 
 if __name__ == "__main__":
-    # Для прод-среды не используем авто-перезапуск.
+    # Запуск сервера
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False)
